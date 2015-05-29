@@ -127,14 +127,26 @@ LatexCmds.Upsih = //'cos it makes sense to me
   bind(Symbol,'\\Upsilon ','<var style="font-family: serif">&upsih;</var>'); //Symbola's 'upsilon with a hook' is a capital Y without hooks :(
 
 //other symbols with the same LaTeX command and HTML character entity reference
+LatexCmds.Alpha =
+LatexCmds.Beta =
 LatexCmds.Gamma =
 LatexCmds.Delta =
+LatexCmds.Epsilon =
+LatexCmds.Zeta =
+LatexCmds.Eta =
 LatexCmds.Theta =
+LatexCmds.Iota =
+LatexCmds.Kappa =
 LatexCmds.Lambda =
+LatexCmds.Mu =
+LatexCmds.Nu =
 LatexCmds.Xi =
 LatexCmds.Pi =
+LatexCmds.Rho =
 LatexCmds.Sigma =
+LatexCmds.Tau =
 LatexCmds.Phi =
+LatexCmds.Chi =
 LatexCmds.Psi =
 LatexCmds.Omega =
 LatexCmds.forall = P(VanillaSymbol, function(_, _super) {
@@ -608,4 +620,34 @@ LatexCmds.lim = NonItalicizedFunction;
       NonItalicizedFunction;
   }
 }());
+
+// extra latex commands
+LatexCmds.Cap = bind(VanillaSymbol, "\\Cap", "&#x22D3;");
+LatexCmds.Cup = bind(VanillaSymbol, "\\Cup", "&#x22D2;");
+LatexCmds.notequiv = bind(VanillaSymbol, "\\not\\equiv", "&#x2262;");
+LatexCmds.nsim = bind(VanillaSymbol, "\\nsim", "&#x2241;");
+LatexCmds.approxeq = bind(VanillaSymbol, "\\approxeq", "&#x224A;");
+LatexCmds.nless = bind(VanillaSymbol, "\\nless", "&#x226E;");
+LatexCmds.ngtr = bind(VanillaSymbol, "\\ngtr", "&#x226F;");
+LatexCmds.nparallel = bind(VanillaSymbol, "\\nparallel", "&#x2226;");
+LatexCmds.nexists = bind(VanillaSymbol, "\\nexists", "&#x2204;");
+LatexCmds.And = bind(VanillaSymbol, "\\And", "&amp;");
+LatexCmds.Rrightarrow = bind(VanillaSymbol, "\\Rrightarrow", "&#x21DB;");
+LatexCmds.Lleftarrow = bind(VanillaSymbol, "\\Lleftarrow", "&#x21DA;");
+LatexCmds.nRightarrow = bind(VanillaSymbol, "\\nRightarrow", "&#x21CF;");
+LatexCmds.nLeftarrow = bind(VanillaSymbol, "\\nLeftarrow", "&#x21CD;");
+LatexCmds.nLeftrightarrow = bind(VanillaSymbol, "\\nLeftrightarrow", "&#x21CE;");
+
+// making these big
+LatexCmds.hyphen = bind(BigSymbol, '\\hyphen ', '&#x2010;');
+LatexCmds.oint = bind(BigSymbol, '\\oint ', '&#8750;');
+LatexCmds.bigcap = bind(BigSymbol, '\\bigcap ', '&#8745;');
+LatexCmds.bigcup = bind(BigSymbol, '\\bigcup ', '&#8746;');
+LatexCmds.bigsqcup = bind(BigSymbol, '\\bigsqcup ', '&#8852;');
+LatexCmds.bigvee = bind(BigSymbol, '\\bigvee ', '&#8744;');
+LatexCmds.bigwedge = bind(BigSymbol, '\\bigwedge ', '&#8743;');
+LatexCmds.bigodot = bind(BigSymbol, '\\bigodot ', '&#8857;');
+LatexCmds.bigotimes = bind(BigSymbol, '\\bigotimes ', '&#8855;');
+LatexCmds.bigoplus = bind(BigSymbol, '\\bigoplus ', '&#8853;');
+LatexCmds.biguplus = bind(BigSymbol, '\\biguplus ', '&#8846;');
 
