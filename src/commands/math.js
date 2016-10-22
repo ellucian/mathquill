@@ -2,90 +2,29 @@
  * Abstract classes of math blocks and commands.
  ************************************************/
 
-var uuid = (function() {
-  var id = 0;
-
-  return function() { return id += 1; };
-})();
-
 /**
  * Math tree node base class.
  * Some math-tree-specific extensions to Node.
  * Both MathBlock's and MathCommand's descend from it.
  */
-var MathElement = P(Node, function(_, _super) {
-  _.init = function(obj) {
-    _super.init.call(this);
-    this.id = uuid();
-    MathElement[this.id] = this;
-  };
-
-  _.toString = function() {
-    return '[MathElement '+this.id+']';
-  };
-
-  _.bubble = function(event /*, args... */) {
-    var args = __slice.call(arguments, 1);
-
-    for (var ancestor = this; ancestor; ancestor = ancestor.parent) {
-      var res = ancestor[event] && ancestor[event].apply(ancestor, args);
-      if (res === false) break;
-    }
-
-    return this;
-  };
-
-  _.postOrder = function(fn /*, args... */) {
-    var args = __slice.call(arguments, 1);
-
-    if (typeof fn === 'string') {
-      var methodName = fn;
-      fn = function(el) {
-        if (methodName in el) el[methodName].apply(el, args);
-      };
-    }
-
-    (function recurse(desc) {
-      desc.eachChild(recurse);
-      fn(desc);
-    })(this);
-  };
-
-  _.jQ = $();
-  _.jQadd = function(jQ) { this.jQ = this.jQ.add(jQ); };
-
-  this.jQize = function(html) {
-    // Sets the .jQ of the entire math subtree rooted at this command.
-    // Expects .createBlocks() to have been called already, since it
-    // calls .html().
-    var jQ = $(html);
-    jQ.find('*').andSelf().each(function() {
-      var jQ = $(this),
-        cmdId = jQ.attr('mathquill-command-id'),
-        blockId = jQ.attr('mathquill-block-id');
-      if (cmdId) MathElement[cmdId].jQadd(jQ);
-      if (blockId) MathElement[blockId].jQadd(jQ);
-    });
-    return jQ;
-  };
-
-  _.finalizeInsert = function() {
+var MathElement = P(Node, function(_, super_) {
+  _.finalizeInsert = function(options, cursor) { // `cursor` param is only for
+      // SupSub::contactWeld, and is deliberately only passed in by writeLatex,
+      // see ea7307eb4fac77c149a11ffdf9a831df85247693
     var self = this;
-    self.postOrder('finalizeTree');
+    self.postOrder('finalizeTree', options);
+    self.postOrder('contactWeld', cursor);
 
     // note: this order is important.
     // empty elements need the empty box provided by blur to
     // be present in order for their dimensions to be measured
-    // correctly in redraw.
+    // correctly by 'reflow' handlers.
     self.postOrder('blur');
 
-    // adjust context-sensitive spacing
-    self.postOrder('respace');
-    if (self[R].respace) self[R].respace();
-    if (self[L].respace) self[L].respace();
-
-    self.postOrder('redraw');
-    self.bubble('redraw');
+    self.postOrder('reflow');
+    if (self[R].siblingCreated) self[R].siblingCreated(options, L);
+    if (self[L].siblingCreated) self[L].siblingCreated(options, R);
+    self.bubble('reflow');
   };
 });
 
@@ -93,10 +32,10 @@ var MathElement = P(Node, function(_, _super) {
  * Commands and operators, like subscripts, exponents, or fractions.
  * Descendant commands are organized into blocks.
  */
-var MathCommand = P(MathElement, function(_, _super) {
+var MathCommand = P(MathElement, function(_, super_) {
   _.init = function(ctrlSeq, htmlTemplate, textTemplate) {
     var cmd = this;
-    _super.init.call(cmd);
+    super_.init.call(cmd);
 
     if (!cmd.ctrlSeq) cmd.ctrlSeq = ctrlSeq;
     if (htmlTemplate) cmd.htmlTemplate = htmlTemplate;
@@ -135,17 +74,12 @@ var MathCommand = P(MathElement, function(_, _super) {
     var replacedFragment = cmd.replacedFragment;
 
     cmd.createBlocks();
-    MathElement.jQize(cmd.html());
+    super_.createLeftOf.call(cmd, cursor);
     if (replacedFragment) {
       replacedFragment.adopt(cmd.ends[L], 0, 0);
       replacedFragment.jQ.appendTo(cmd.ends[L].jQ);
     }
-
-    cursor.jQ.before(cmd.jQ);
-    cursor[L] = cmd.adopt(cursor.parent, cursor[L], cursor[R]);
-
-    cmd.finalizeInsert(cursor);
-
+    cmd.finalizeInsert(cursor.options);
     cmd.placeCursor(cursor);
   };
   _.createBlocks = function() {
@@ -158,7 +92,6 @@ var MathCommand = P(MathElement, function(_, _super) {
       newBlock.adopt(cmd, cmd.ends[R], 0);
     }
   };
-  _.respace = noop; //placeholder for context-sensitive spacing
   _.placeCursor = function(cursor) {
     //insert the cursor at the right end of the first empty child, searching
     //left-to-right, or if none empty, the right end child
@@ -167,15 +100,69 @@ var MathCommand = P(MathElement, function(_, _super) {
     }));
   };
 
-  // remove()
-  _.remove = function() {
-    this.disown();
-    this.jQ.remove();
-
-    this.postOrder(function(el) { delete MathElement[el.id]; });
-
-    return this;
+  // editability methods: called by the cursor for editing, cursor movements,
+  // and selection of the MathQuill tree, these all take in a direction and
+  // the cursor
+  _.moveTowards = function(dir, cursor, updown) {
+    var updownInto = updown && this[updown+'Into'];
+    cursor.insAtDirEnd(-dir, updownInto || this.ends[-dir]);
   };
+  _.deleteTowards = function(dir, cursor) {
+    if (this.isEmpty()) cursor[dir] = this.remove()[dir];
+    else this.moveTowards(dir, cursor, null);
+  };
+  _.selectTowards = function(dir, cursor) {
+    cursor[-dir] = this;
+    cursor[dir] = this[dir];
+  };
+  _.selectChildren = function() {
+    return Selection(this, this);
+  };
+  _.unselectInto = function(dir, cursor) {
+    cursor.insAtDirEnd(-dir, cursor.anticursor.ancestors[this.id]);
+  };
+  _.seek = function(pageX, cursor) {
+    function getBounds(node) {
+      var bounds = {}
+      bounds[L] = node.jQ.offset().left;
+      bounds[R] = bounds[L] + node.jQ.outerWidth();
+      return bounds;
+    }
+
+    var cmd = this;
+    var cmdBounds = getBounds(cmd);
+
+    if (pageX < cmdBounds[L]) return cursor.insLeftOf(cmd);
+    if (pageX > cmdBounds[R]) return cursor.insRightOf(cmd);
+
+    var leftLeftBound = cmdBounds[L];
+    cmd.eachChild(function(block) {
+      var blockBounds = getBounds(block);
+      if (pageX < blockBounds[L]) {
+        // closer to this block's left bound, or the bound left of that?
+        if (pageX - leftLeftBound < blockBounds[L] - pageX) {
+          if (block[L]) cursor.insAtRightEnd(block[L]);
+          else cursor.insLeftOf(cmd);
+        }
+        else cursor.insAtLeftEnd(block);
+        return false;
+      }
+      else if (pageX > blockBounds[R]) {
+        if (block[R]) leftLeftBound = blockBounds[R]; // continue to next block
+        else { // last (rightmost) block
+          // closer to this block's right bound, or the cmd's right bound?
+          if (cmdBounds[R] - pageX < pageX - blockBounds[R]) {
+            cursor.insRightOf(cmd);
+          }
+          else cursor.insAtRightEnd(block);
+        }
+      }
+      else {
+        block.seek(pageX, cursor);
+        return false;
+      }
+    });
+  }
 
   // methods involved in creating and cross-linking with HTML DOM nodes
   /*
@@ -306,11 +293,11 @@ var MathCommand = P(MathElement, function(_, _super) {
 /**
  * Lightweight command without blocks or children.
  */
-var Symbol = P(MathCommand, function(_, _super) {
+var Symbol = P(MathCommand, function(_, super_) {
   _.init = function(ctrlSeq, html, text) {
     if (!text) text = ctrlSeq && ctrlSeq.length > 1 ? ctrlSeq.slice(1) : ctrlSeq;
 
-    _super.init.call(this, ctrlSeq, html, [ text ]);
+    super_.init.call(this, ctrlSeq, html, [ text ]);
   };
 
   _.parser = function() { return Parser.succeed(this); };
@@ -320,10 +307,39 @@ var Symbol = P(MathCommand, function(_, _super) {
     replacedFragment.remove();
   };
   _.createBlocks = noop;
+
+  _.moveTowards = function(dir, cursor) {
+    cursor.jQ.insDirOf(dir, this.jQ);
+    cursor[-dir] = this;
+    cursor[dir] = this[dir];
+  };
+  _.deleteTowards = function(dir, cursor) {
+    cursor[dir] = this.remove()[dir];
+  };
+  _.seek = function(pageX, cursor) {
+    // insert at whichever side the click was closer to
+    if (pageX - this.jQ.offset().left < this.jQ.outerWidth()/2)
+      cursor.insLeftOf(this);
+    else
+      cursor.insRightOf(this);
+  };
+
   _.latex = function(){ return this.ctrlSeq; };
   _.text = function(){ return this.textTemplate; };
   _.placeCursor = noop;
   _.isEmpty = function(){ return true; };
+});
+var VanillaSymbol = P(Symbol, function(_, super_) {
+  _.init = function(ch, html) {
+    super_.init.call(this, ch, '<span>'+(html || ch)+'</span>');
+  };
+});
+var BinaryOperator = P(Symbol, function(_, super_) {
+  _.init = function(ctrlSeq, html, text) {
+    super_.init.call(this,
+      ctrlSeq, '<span class="mq-binary-operator">'+html+'</span>', text
+    );
+  };
 });
 
 /**
@@ -331,72 +347,122 @@ var Symbol = P(MathCommand, function(_, _super) {
  * symbols and operators that descend (in the Math DOM tree) from
  * ancestor operators.
  */
-var MathBlock = P(MathElement, function(_) {
+var MathBlock = P(MathElement, function(_, super_) {
   _.join = function(methodName) {
     return this.foldChildren('', function(fold, child) {
       return fold + child[methodName]();
     });
   };
+  _.html = function() { return this.join('html'); };
   _.latex = function() { return this.join('latex'); };
   _.text = function() {
-    return this.ends[L] === this.ends[R] ?
+    return (this.ends[L] === this.ends[R] && this.ends[L] !== 0) ?
       this.ends[L].text() :
-      '(' + this.join('text') + ')'
+      this.join('text')
     ;
   };
-  _.isEmpty = function() {
-    return this.ends[L] === 0 && this.ends[R] === 0;
+
+  _.keystroke = function(key, e, ctrlr) {
+    if (ctrlr.options.spaceBehavesLikeTab
+        && (key === 'Spacebar' || key === 'Shift-Spacebar')) {
+      e.preventDefault();
+      ctrlr.escapeDir(key === 'Shift-Spacebar' ? L : R, key, e);
+      return;
+    }
+    return super_.keystroke.apply(this, arguments);
   };
-  _.write = function(cursor, ch, replacedFragment) {
-    var cmd;
-    if (ch.match(/^[a-eg-zA-Z]$/)) //exclude f because want florin
-      cmd = Variable(ch);
-    else if (cmd = CharCmds[ch] || LatexCmds[ch])
-      cmd = cmd(ch);
+
+  // editability methods: called by the cursor for editing, cursor movements,
+  // and selection of the MathQuill tree, these all take in a direction and
+  // the cursor
+  _.moveOutOf = function(dir, cursor, updown) {
+    var updownInto = updown && this.parent[updown+'Into'];
+    if (!updownInto && this[dir]) cursor.insAtDirEnd(-dir, this[dir]);
+    else cursor.insDirOf(dir, this.parent);
+  };
+  _.selectOutOf = function(dir, cursor) {
+    cursor.insDirOf(dir, this.parent);
+  };
+  _.deleteOutOf = function(dir, cursor) {
+    cursor.unwrapGramp();
+  };
+  _.seek = function(pageX, cursor) {
+    var node = this.ends[R];
+    if (!node || node.jQ.offset().left + node.jQ.outerWidth() < pageX) {
+      return cursor.insAtRightEnd(this);
+    }
+    if (pageX < this.ends[L].jQ.offset().left) return cursor.insAtLeftEnd(this);
+    while (pageX < node.jQ.offset().left) node = node[L];
+    return node.seek(pageX, cursor);
+  };
+  _.chToCmd = function(ch) {
+    var cons;
+    // exclude f because it gets a dedicated command with more spacing
+    if (ch.match(/^[a-eg-zA-Z]$/))
+      return Letter(ch);
+    else if (/^\d$/.test(ch))
+      return Digit(ch);
+    else if (cons = CharCmds[ch] || LatexCmds[ch])
+      return cons(ch);
     else
-      cmd = VanillaSymbol(ch);
-
-    if (replacedFragment) cmd.replaces(replacedFragment);
-
-    cmd.createLeftOf(cursor);
+      return VanillaSymbol(ch);
   };
+  _.write = function(cursor, ch) {
+    var cmd = this.chToCmd(ch);
+    if (cursor.selection) cmd.replaces(cursor.replaceSelection());
+    cmd.createLeftOf(cursor.show());
+  };
+
   _.focus = function() {
-    this.jQ.addClass('hasCursor');
-    this.jQ.removeClass('empty');
+    this.jQ.addClass('mq-hasCursor');
+    this.jQ.removeClass('mq-empty');
 
     return this;
   };
   _.blur = function() {
-    this.jQ.removeClass('hasCursor');
+    this.jQ.removeClass('mq-hasCursor');
     if (this.isEmpty())
-      this.jQ.addClass('empty');
+      this.jQ.addClass('mq-empty');
 
     return this;
   };
 });
 
-/**
- * Math tree fragment base class.
- * Some math-tree-specific extensions to Fragment.
- */
-var MathFragment = P(Fragment, function(_, _super) {
-  _.init = function(leftEnd, rightEnd) {
-    // just select one thing if only one argument
-    _super.init.call(this, leftEnd, rightEnd || leftEnd);
-    this.jQ = this.fold($(), function(jQ, child){ return child.jQ.add(jQ); });
-  };
-  _.latex = function() {
-    return this.fold('', function(latex, el){ return latex + el.latex(); });
-  };
-  _.remove = function() {
-    this.jQ.remove();
+API.StaticMath = function(APIClasses) {
+  return P(APIClasses.AbstractMathQuill, function(_, super_) {
+    this.RootBlock = MathBlock;
+    _.__mathquillify = function() {
+      super_.__mathquillify.call(this, 'mq-math-mode');
+      this.__controller.delegateMouseEvents();
+      this.__controller.staticMathTextareaEvents();
+      return this;
+    };
+    _.init = function() {
+      super_.init.apply(this, arguments);
+      this.__controller.root.postOrder(
+        'registerInnerField', this.innerFields = [], APIClasses.MathField);
+    };
+    _.latex = function() {
+      var returned = super_.latex.apply(this, arguments);
+      if (arguments.length > 0) {
+        this.__controller.root.postOrder(
+          'registerInnerField', this.innerFields = [], APIClasses.MathField);
+      }
+      return returned;
+    };
+  });
+};
 
-    this.each(function(el) {
-      el.postOrder(function(desc) {
-        delete MathElement[desc.id];
-      });
-    });
-
-    return this.disown();
-  };
-});
+var RootMathBlock = P(MathBlock, RootBlockMixin);
+API.MathField = function(APIClasses) {
+  return P(APIClasses.EditableField, function(_, super_) {
+    this.RootBlock = RootMathBlock;
+    _.__mathquillify = function(opts, interfaceVersion) {
+      this.config(opts);
+      if (interfaceVersion > 1) this.__controller.root.reflow = noop;
+      super_.__mathquillify.call(this, 'mq-editable-field mq-math-mode');
+      delete this.__controller.root.reflow;
+      return this;
+    };
+  });
+};
